@@ -6,16 +6,17 @@ Västtrafik API
 import base64
 import json
 import requests
+import urllib.parse
 from datetime import datetime
 from datetime import timedelta
 
-TOKEN_URL = 'https://api.vasttrafik.se/token'
-API_BASE_URL = 'https://api.vasttrafik.se/bin/rest.exe/v2'
-DATE_FORMAT = '%Y-%m-%d'
-TIME_FORMAT = '%H:%M'
+TOKEN_URL = 'https://ext-api.vasttrafik.se/token'
+API_BASE_URL = 'https://ext-api.vasttrafik.se/pr/v4'
+
 
 class Error(Exception):
     pass
+
 
 def _get_node(response, *ancestors):
     """ Traverse tree to node """
@@ -26,6 +27,13 @@ def _get_node(response, *ancestors):
         else:
             document = document[ancestor]
     return document
+
+
+def _format_datetime(date: datetime):
+    if date.tzinfo is None:
+        default_tz = datetime.now().astimezone().tzinfo
+        date = date.replace(tzinfo=default_tz)
+    return urllib.parse.quote(date.isoformat())
 
 
 class JournyPlanner:
@@ -43,80 +51,61 @@ class JournyPlanner:
             'Content-Type': 'application/x-www-form-urlencoded',
             'Authorization': 'Basic ' + base64.b64encode(
                 (self._key + ':' + self._secret).encode()).decode()
-            }
+        }
         data = {'grant_type': 'client_credentials'}
 
         response = requests.post(TOKEN_URL, data=data, headers=headers)
         obj = json.loads(response.content.decode('UTF-8'))
         self._token = obj['access_token']
         self._token_expire_date = (
-            datetime.now() +
-            timedelta(minutes=self._expiery))
+                datetime.now() +
+                timedelta(minutes=self._expiery))
 
     # LOCATION
-
-    def location_allstops(self):
-        """ location.allstops """
-        response = self._request(
-            'location.allstops')
-        return _get_node(response, 'LocationList', 'StopLocation')
 
     def location_nearbystops(self, origin_coord_lat, origin_coord_long):
         """ location.nearbystops """
         response = self._request(
-            'location.nearbystops',
-            originCoordLat=origin_coord_lat,
-            originCoordLong=origin_coord_long)
-        return _get_node(response, 'LocationList', 'StopLocation')
-
-    def location_nearbyaddress(self, origin_coord_lat, origin_coord_long):
-        """ location.nearbyaddress """
-        response = self._request(
-            'location.nearbyaddress',
-            originCoordLat=origin_coord_lat,
-            originCoordLong=origin_coord_long)
-        return _get_node(response, 'LocationList', 'CoordLocation')
+            'locations/by-coordinates',
+            latitude=origin_coord_lat,
+            longitude=origin_coord_long)
+        return _get_node(response, 'results')
 
     def location_name(self, name):
         """ location.name """
         response = self._request(
-            'location.name',
-            input=name)
-        return _get_node(response, 'LocationList', 'StopLocation')
+            'locations/by-text',
+            q=name,
+            types='stoparea')
+        return _get_node(response, 'results')
 
     # ARRIVAL BOARD
-
     def arrivalboard(self, stop_id, date=None, direction=None):
         """ arrivalBoard """
         date = date if date else datetime.now()
         request_parameters = {
-            'id': stop_id,
-            'date': date.strftime(DATE_FORMAT),
-            'time': date.strftime(TIME_FORMAT)
+            'startDateTime': _format_datetime(date)
         }
         if direction:
-            request_parameters['directiona'] = direction
+            request_parameters['directionGid'] = direction
         response = self._request(
-            'arrivalBoard',
+            f'stop-areas/{stop_id}/arrivals',
             **request_parameters)
-        return _get_node(response, 'ArrivalBoard', 'Arrival')
+        return _get_node(response, 'results')
 
     # DEPARTURE BOARD
-
     def departureboard(self, stop_id, date=None, direction=None):
         """ departureBoard """
         date = date if date else datetime.now()
         request_parameters = {
-            'id': stop_id,
-            'date': date.strftime(DATE_FORMAT),
-            'time': date.strftime(TIME_FORMAT)
+            'startDateTime': _format_datetime(date)
         }
         if direction:
-            request_parameters['direction'] = direction
+            request_parameters['directionGid'] = direction
         response = self._request(
-            'departureBoard',
+            f'stop-areas/{stop_id}/departures',
             **request_parameters)
-        return _get_node(response, 'DepartureBoard', 'Departure')
+        return _get_node(response, 'results')
 
     # TRIP
 
@@ -124,22 +113,21 @@ class JournyPlanner:
         """ trip """
         date = date if date else datetime.now()
         response = self._request(
-            'trip',
-            originId=origin_id,
-            destId=dest_id,
-            date=date.strftime(DATE_FORMAT),
-            time=date.strftime(TIME_FORMAT))
-        return _get_node(response, 'TripList', 'Trip')
+            'journeys',
+            originGid=origin_id,
+            destinationGid=dest_id,
+            dateTime=_format_datetime(date))
+        return _get_node(response, 'results')
 
     def _request(self, service, **parameters):
         """ request builder """
-        urlformat = "{baseurl}/{service}?{parameters}&format=json"
+        urlformat = "{baseurl}/{service}?{parameters}"
         url = urlformat.format(
             baseurl=API_BASE_URL,
             service=service,
             parameters="&".join([
                 "{}={}".format(key, value) for key, value in parameters.items()
-                ]))
+            ]))
         if datetime.now() > self._token_expire_date:
             self.update_token()
         headers = {'Authorization': 'Bearer ' + self._token}
@@ -148,4 +136,4 @@ class JournyPlanner:
             return json.loads(res.content.decode('UTF-8'))
         else:
             raise Error('Error: ' + str(res.status_code) +
-                            str(res.content))
+                        str(res.content))

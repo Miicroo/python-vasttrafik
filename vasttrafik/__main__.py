@@ -5,6 +5,8 @@ from __future__ import print_function
 import argparse
 from datetime import datetime
 
+from vasttrafik.journy_planner import _get_node
+
 try:
     import configparser
 except ImportError:
@@ -49,7 +51,9 @@ def print_table(document, *columns):
     for element in document:
         row = []
         for item, _ in columns:
-            if item in element:
+            if '.' in item:
+                row.append(_get_node(element, *item.split('.')))
+            elif item in element:
                 row.append(element[item])
             else:
                 row.append(None)
@@ -61,6 +65,7 @@ def print_trip_table(document):
     """ Print trip table """
     headers = [
         'Alt.',
+        'Line',
         'Name',
         'Time',
         'Track',
@@ -71,22 +76,24 @@ def print_trip_table(document):
     table = []
     altnr = 0
     for alternative in document:
+        print(alternative)
         altnr += 1
         first_trip_in_alt = True
-        if not isinstance(alternative['Leg'], list):
-            alternative['Leg'] = [alternative['Leg']]
-        for part in alternative['Leg']:
-            orig = part['Origin']
-            dest = part['Destination']
+        if not isinstance(alternative['tripLegs'], list):
+            alternative['tripLegs'] = [alternative['tripLegs']]
+        for part in alternative['tripLegs']:
+            orig = _get_node(part, 'origin', 'stopPoint')
+            dest = _get_node(part, 'destination', 'stopPoint')
             row = [
                 altnr if first_trip_in_alt else None,
-                part['name'],
-                orig['rtTime'] if 'rtTime' in orig else orig['time'],
-                orig['track'],
-                part['direction'] if 'direction' in part else None,
+                _get_node(part, 'serviceJourney', 'line', 'shortName'),
+                orig['name'],
+                part['plannedDepartureTime'] if 'plannedDepartureTime' in part else orig['plannedTime'],
+                orig['platform'],
+                _get_node(part, 'serviceJourney', 'direction'),
                 dest['name'],
-                dest['track'],
-                dest['rtTime'] if 'rtTime' in dest else dest['time'],
+                dest['platform'],
+                part['plannedArrivalTime'] if 'plannedArrivalTime' in part else dest['plannedTime'],
                 ]
             table.append(row)
             first_trip_in_alt = False
@@ -135,9 +142,7 @@ def main():
     location_name_parser.add_argument(
         'name',
         help='Name of stop')
-    location_subparser.add_parser(
-        'allstops',
-        help='Get all stops')
+
     location_nearbystops_parser = location_subparser.add_parser(
         'nearbystops',
         help='Get stops nearby location')
@@ -147,17 +152,8 @@ def main():
     location_nearbystops_parser.add_argument(
         'lon',
         help='longitude')
-    location_nearbystops_parser = location_subparser.add_parser(
-        'nearbyaddress',
-        help='Get address nearby location')
-    location_nearbystops_parser.add_argument(
-        'lat',
-        help='latitude')
-    location_nearbystops_parser.add_argument(
-        'lon',
-        help='longitude')
 
-    # ARIVAL BOARD
+    # ARRIVAL BOARD
     arrival_parser = service_parser.add_parser(
         'arrival',
         help='Get arrival board for stop')
@@ -165,13 +161,9 @@ def main():
         'id',
         help='Id or name of stop')
     arrival_parser.add_argument(
-        '--date', '-d',
+        '--dateTime', '-d',
         nargs='?',
-        help='The date, default current date')
-    arrival_parser.add_argument(
-        '--time', '-t',
-        nargs='?',
-        help='The time, default current time')
+        help='The date and time, default current date')
     arrival_parser.add_argument(
         '--direction',
         default=None,
@@ -185,36 +177,28 @@ def main():
         'id',
         help='Id or name of stop')
     departure_parser.add_argument(
-        '--date', '-d',
+        '--dateTime', '-d',
         nargs='?',
-        help='The date, default current date')
-    departure_parser.add_argument(
-        '--time', '-t',
-        nargs='?',
-        help='The time, default current time')
+        help='The date and time, default current date')
     departure_parser.add_argument(
         '--direction',
         default=None,
         help='Id or name to filter on departures in specified direction')
 
     # TRIP
-    departure_parser = service_parser.add_parser(
+    trip_parser = service_parser.add_parser(
         'trip',
         help='Get trip suggestions')
-    departure_parser.add_argument(
+    trip_parser.add_argument(
         'originId',
         help='ID or name of departure stop')
-    departure_parser.add_argument(
+    trip_parser.add_argument(
         'destinationId',
         help='ID or name of destination stop')
-    departure_parser.add_argument(
-        '--date', '-d',
+    trip_parser.add_argument(
+        '--dateTime', '-d',
         nargs='?',
-        help='The date, default current date')
-    departure_parser.add_argument(
-        '--time', '-t',
-        nargs='?',
-        help='The time, default current time')
+        help='The date and time, default current date')
 
     args = parser.parse_args()
 
@@ -229,7 +213,7 @@ def main():
         value = getattr(args, attribute)
         if not value or value.isdigit():
             return
-        setattr(args, attribute, planner.location_name(value)[0]['id'])
+        setattr(args, attribute, planner.location_name(value)[0]['gid'])
 
     # Convert stop names to id if needed
     name_to_id('id')
@@ -250,6 +234,14 @@ def main():
         date = date.replace(
             hour=newtime.hour,
             minute=newtime.minute)
+    if hasattr(args, 'dateTime') and args.dateTime:
+        newdate = datetime.strptime(args.dateTime, '%Y-%m-%d %H:%M')
+        date = date.replace(
+            year=newdate.year,
+            month=newdate.month,
+            day=newdate.day,
+            hour=newdate.hour,
+            minute=newdate.minute)
 
     # STORE CREDENTIALS
     if args.service == 'store':
@@ -259,29 +251,17 @@ def main():
 
     # LOCATION
     if args.service == 'location':
-        if args.location_method == 'allstops':
-            print_table(
-                planner.location_allstops(),
-                ('id', 'ID'),
-                ('name', 'Name'),
-                ('track', 'Track'))
         if args.location_method == 'name':
             print_table(
                 planner.location_name(args.name),
-                ('id', 'ID'),
+                ('gid', 'ID'),
                 ('name', 'Name'))
         if args.location_method == 'nearbystops':
             print_table(
                 planner.location_nearbystops(args.lat, args.lon),
-                ('id', 'ID'),
+                ('gid', 'ID'),
                 ('name', 'Name'),
                 ('track', 'Track'))
-        if args.location_method == 'nearbyaddress':
-            print_table(
-                [planner.location_nearbyaddress(args.lat, args.lon)],
-                ('name', 'Name'),
-                ('lon', 'Longitude'),
-                ('lat', 'Latitude'))
 
     # ARRIVALBOARD
     elif args.service == 'arrival':
@@ -290,11 +270,11 @@ def main():
                 args.id,
                 date=date,
                 direction=args.direction),
-            ('sname', 'Line'),
-            ('time', 'Arrival'),
-            ('rtTime', 'Prel.Arrival'),
-            ('track', 'Track'),
-            ('origin', 'Origin'))
+            ('serviceJourney.line.shortName', 'Line'),
+            ('plannedTime', 'Departure'),
+            ('estimatedOtherwisePlannedTime', 'Prel.Departure'),
+            ('stopPoint.platform', 'Track'),
+            ('serviceJourney.origin', 'Origin'))
 
     # DEPARTUREBOARD
     elif args.service == 'departure':
@@ -303,11 +283,11 @@ def main():
                 args.id,
                 date=date,
                 direction=args.direction),
-            ('sname', 'Line'),
-            ('time', 'Departure'),
-            ('rtTime', 'Prel.Departure'),
-            ('track', 'Track'),
-            ('direction', 'Direction'))
+            ('serviceJourney.line.shortName', 'Line'),
+            ('plannedTime', 'Departure'),
+            ('estimatedOtherwisePlannedTime', 'Prel.Departure'),
+            ('stopPoint.platform', 'Track'),
+            ('serviceJourney.direction', 'Direction'))
 
     # TRIP
     elif args.service == 'trip':
