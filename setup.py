@@ -4,11 +4,11 @@ from setuptools import setup
 
 setup(
     name='vtjp',
-    version='0.1.14',
+    version='0.2.1',
     description='Västtrafik API.',
     long_description='Python implementation of Västtrafik Journy planner'
                      '(vtjp) public API.',
-    url='https://github.com/persandstrom/python-vasttrafik',
+    url='https://github.com/Miicroo/python-vasttrafik',
     author='Per Sandström',
     author_email='per.j.sandstrom@gmail.com',
     license='MIT',
@@ -24,7 +24,7 @@ setup(
         'Programming Language :: Python :: 3.5',
     ],
     keywords='vasttrafik västtrafik',
-    install_requires=['requests>=2.9.1', 'tabulate>=0.7.5'],
+    install_requires=['requests>=2.31.0', 'tabulate>=0.7.5'],
     packages=['vasttrafik'],
     zip_safe=True,
     entry_points={
