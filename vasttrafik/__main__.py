@@ -76,7 +76,6 @@ def print_trip_table(document):
     table = []
     altnr = 0
     for alternative in document:
-        print(alternative)
         altnr += 1
         first_trip_in_alt = True
         if not isinstance(alternative['tripLegs'], list):
